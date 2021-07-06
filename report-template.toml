@@ -1,4 +1,4 @@
-[github]
+[project.github]
 org = "rust-lang"
 repos = [
     "rust",

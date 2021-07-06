@@ -41,10 +41,15 @@ impl Report {
         data: &ReportData,
     ) -> Vec<HighContributorRow> {
         config
-            .github
-            .repos
+            .github_projects()
             .iter()
-            .map(|repo| self.high_contributor_row(config, data, repo))
+            .flat_map(|github_project| {
+                github_project
+                    .repos
+                    .iter()
+                    .map(|repo| self.high_contributor_row(config, data, repo))
+                    .collect::<Vec<_>>()
+            })
             .collect()
     }
 

@@ -5,15 +5,19 @@ use std::{fs::File, path::PathBuf};
 use fehler::throws;
 use serde::Deserialize;
 use stable_eyre::eyre;
-use stable_eyre::eyre::Error;
+use stable_eyre::eyre::{Error, WrapErr};
 
 use crate::metrics::Consumer;
 use crate::metrics::{self, Graphql};
+use std::collections::HashMap as Map;
+use std::convert::TryFrom;
+use std::str::FromStr;
 
 mod high_contributor;
 mod repo_info;
 mod repo_participant;
 mod top_crates;
+pub(crate) mod util;
 
 pub struct Report {
     /// Directory where to store the data.
@@ -25,9 +29,50 @@ pub struct Report {
 
 #[derive(Debug, Deserialize)]
 struct ReportConfig {
-    github: GithubConfig,
+    project: Vec<ProjectConfig>,
     high_contributor: HighContributorConfig,
     data_source: DataSourceConfig,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(try_from = "IntermediateProjectConfig")]
+struct ProjectConfig(Vec<ProjectConfigValue>);
+
+impl TryFrom<IntermediateProjectConfig> for ProjectConfig {
+    type Error = eyre::Error;
+
+    fn try_from(value: IntermediateProjectConfig) -> Result<Self, Self::Error> {
+        let result = value
+            .0
+            .into_iter()
+            .map(|(k, v)| v.map_by_pair(&k))
+            .collect::<eyre::Result<Vec<_>>>()?;
+
+        Ok(ProjectConfig(result))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct IntermediateProjectConfig(Map<String, ProjectConfigValue>);
+
+impl ReportConfig {
+    fn github_projects(&self) -> Vec<&Github> {
+        self.project
+            .iter()
+            .filter_map(|project| match project {
+                ProjectConfigValue::Github(project) => Some(project),
+            })
+            .collect()
+    }
+
+    fn github_projects_mut(&mut self) -> Vec<&mut Github> {
+        self.project
+            .iter_mut()
+            .filter_map(|project| match project {
+                ProjectConfigValue::Github(project) => Some(project),
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug)]
@@ -38,7 +83,33 @@ pub struct ReportData {
 }
 
 #[derive(Deserialize, Debug)]
-struct GithubConfig {
+#[serde(untagged)]
+pub enum ProjectConfigValue {
+    #[serde(rename = "github")]
+    Github(Github),
+}
+
+impl ProjectConfigValue {
+    // The array of project tables is deserialized to a vec of (hash)maps.
+    // The key of a key-value pair in the project table, is not necessarily identifiable as the type
+    // of the value. Since we require that the key and value in the
+    // key-value pair (k, v) match  `e.g. the key github should always have be the `Github` variant of
+    // the `ProjectConfigValue`), and since we don't recognize this at deserialization time, we have to
+    // verify it in hindsight.
+    // FIXME: It would be more elegant to solve this during deserialization.
+    fn map_by_pair(self, identifier: &str) -> eyre::Result<Self> {
+        match (identifier, &self) {
+            ("github", Self::Github(_)) => Ok(self),
+            (field, _) => eyre::bail!(
+                "Invalid field '{}' found for 'project' in report.toml",
+                field
+            ),
+        }
+    }
+}
+
+#[derive(Deserialize, Debug)]
+pub struct Github {
     org: String,
     repos: Vec<String>,
 }
@@ -107,12 +178,15 @@ impl Report {
     #[throws]
     async fn load_config(&mut self) -> ReportConfig {
         let report_config_file = self.data_dir.join("report.toml");
-        let report_config_bytes = tokio::fs::read_to_string(report_config_file).await?;
-        let mut config: ReportConfig = toml::from_str(&report_config_bytes)?;
+        let report_config_bytes = tokio::fs::read_to_string(&report_config_file).await?;
+        let mut config: ReportConfig = toml::from_str(&report_config_bytes)
+            .wrap_err_with(|| format!("Unable to parse '{}'", report_config_file.display()))?;
 
-        if config.github.repos.is_empty() {
-            let graphql = &mut self.graphql("all-repos");
-            config.github.repos = metrics::all_repos(graphql, &config.github.org).await?;
+        for project in config.github_projects_mut() {
+            if project.repos.is_empty() {
+                let graphql = &mut self.graphql("all-repos");
+                project.repos = metrics::all_repos(graphql, &project.org).await?;
+            }
         }
 
         config

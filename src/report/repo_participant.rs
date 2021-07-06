@@ -2,7 +2,7 @@ use std::path::Path;
 
 use crate::metrics;
 use crate::report::repo_info::RepoInfo;
-use crate::report::Report;
+use crate::report::{util, Report};
 use crate::util::percentage;
 use fehler::throws;
 use serde::Deserialize;
@@ -40,14 +40,11 @@ impl Report {
         let repo_participants = input_dir.join("repo-participants.csv");
         let graphql = self.graphql("repo-participants");
 
+        let org_repos = util::organisation_repositories(&config.github_projects());
+
         self.produce_input(
             &repo_participants,
-            metrics::RepoParticipants::new(
-                graphql,
-                config.github.org.clone(),
-                config.github.repos.clone(),
-                config.data_source.number_of_days,
-            ),
+            metrics::RepoParticipants::new(graphql, org_repos, config.data_source.number_of_days),
         )
         .await?;
 

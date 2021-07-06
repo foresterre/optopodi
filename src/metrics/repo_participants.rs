@@ -12,22 +12,15 @@ use super::{Graphql, Producer};
 
 pub struct RepoParticipants {
     graphql: Graphql,
-    org_name: String,
-    repo_names: Vec<String>,
+    org_repos: Vec<GitHubOrganization>,
     number_of_days: i64,
 }
 
 impl RepoParticipants {
-    pub fn new(
-        graphql: Graphql,
-        org_name: String,
-        repo_names: Vec<String>,
-        number_of_days: i64,
-    ) -> Self {
+    pub fn new(graphql: Graphql, org_repos: Vec<GitHubOrganization>, number_of_days: i64) -> Self {
         Self {
             graphql,
-            org_name,
-            repo_names,
+            org_repos,
             number_of_days,
         }
     }
@@ -48,36 +41,38 @@ impl Producer for RepoParticipants {
 
     async fn producer_task(mut self, tx: Sender<Vec<String>>) -> Result<(), eyre::Error> {
         // If no repository is given, repeat for all repositories.
-        for repo_name in &self.repo_names {
-            let data = pr_participants(
-                &mut self.graphql,
-                &self.org_name,
-                repo_name,
-                Duration::days(self.number_of_days),
-            )
-            .await?;
-
-            // FIXME -- there must be some way to "autoderive" this from
-            // the `ParticipantCounts` data structure, maybe with serde?
-            for (
-                login,
-                ParticipantCounts {
-                    participated_in,
-                    authored,
-                    reviewed,
-                    resolved,
-                },
-            ) in data
-            {
-                tx.send(vec![
-                    login,
-                    repo_name.clone(),
-                    participated_in.to_string(),
-                    authored.to_string(),
-                    reviewed.to_string(),
-                    resolved.to_string(),
-                ])
+        for org in &self.org_repos {
+            for repo_name in org.repository_names() {
+                let data = pr_participants(
+                    &mut self.graphql,
+                    org.organisation_name(),
+                    repo_name,
+                    Duration::days(self.number_of_days),
+                )
                 .await?;
+
+                // FIXME -- there must be some way to "autoderive" this from
+                // the `ParticipantCounts` data structure, maybe with serde?
+                for (
+                    login,
+                    ParticipantCounts {
+                        participated_in,
+                        authored,
+                        reviewed,
+                        resolved,
+                    },
+                ) in data
+                {
+                    tx.send(vec![
+                        login,
+                        repo_name.clone(),
+                        participated_in.to_string(),
+                        authored.to_string(),
+                        reviewed.to_string(),
+                        resolved.to_string(),
+                    ])
+                    .await?;
+                }
             }
         }
 
@@ -100,6 +95,7 @@ struct ParticipantCounts {
     response_derives = "Serialize,Debug"
 )]
 pub struct PrsAndParticipants;
+use crate::report::util::GitHubOrganization;
 use prs_and_participants as pap;
 
 /// count the number of pull requests created in the given time period for the given repository within the given GitHub organization

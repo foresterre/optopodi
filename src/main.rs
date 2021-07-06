@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 mod metrics;
 mod report;
+mod serde;
 mod token;
 mod util;
 

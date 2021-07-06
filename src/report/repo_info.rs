@@ -3,6 +3,7 @@ use serde::Deserialize;
 use stable_eyre::eyre::Error;
 use std::{collections::HashMap, path::Path};
 
+use crate::report::util;
 use crate::{metrics, util::percentage};
 
 use super::{repo_participant::RepoParticipant, Report, ReportConfig};
@@ -30,14 +31,11 @@ impl Report {
 
         let graphql = self.graphql("repo-infos");
 
+        let repos = util::organisation_repositories(&config.github_projects());
+
         self.produce_input(
             &repo_infos,
-            metrics::ListReposForOrg::new(
-                graphql,
-                config.github.org.clone(),
-                config.github.repos.clone(),
-                config.data_source.number_of_days,
-            ),
+            metrics::ListReposForOrg::new(graphql, repos, config.data_source.number_of_days),
         )
         .await?;
 
@@ -48,6 +46,7 @@ impl Report {
 impl RepoInfos {
     #[throws]
     fn parse_repo_infos(repo_infos: &Path) -> RepoInfos {
+        println!("{}", repo_infos.display());
         let mut rdr = csv::Reader::from_path(repo_infos)?;
         let mut map = HashMap::new();
         for result in rdr.deserialize() {
